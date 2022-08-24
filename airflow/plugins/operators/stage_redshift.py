@@ -6,7 +6,7 @@ from airflow.utils.decorators import apply_defaults
 
 class StageToRedshiftOperator(BaseOperator):
     # make s3_key templatable i.e. context variables will render the template for example execution_date.year added to s3_key in dag
-    #     template_fields = ('s3_key',)
+    template_fields = ('s3_key',)
     ui_color = '#358140'
 
     copy_sql = """
