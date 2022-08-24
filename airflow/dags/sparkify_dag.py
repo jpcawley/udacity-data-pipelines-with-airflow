@@ -1,22 +1,24 @@
 from datetime import datetime, timedelta
 import os
-# import datetime
 from airflow import DAG
 from airflow.operators.dummy_operator import DummyOperator
 from airflow.operators.postgres_operator import PostgresOperator
 from airflow.operators.subdag_operator import SubDagOperator
 from airflow.operators import (StageToRedshiftOperator, LoadFactOperator,
-                               LoadDimensionOperator, DataQualityOperator)
-
-from airflow.sensors import ExternalTaskSensor
+                                LoadDimensionOperator, DataQualityOperator, CreateTableOperator)
 from helpers import SqlQueries
-
-from create_tables_subdag import get_s3_to_redshift_dag
-
 import create_table_stmts
 
 # AWS_KEY = os.environ.get('AWS_KEY')
 # AWS_SECRET = os.environ.get('AWS_SECRET')
+
+REDSHIFT_CONN_ID='redshift'
+AWS_CREDENTIALS_ID='aws_credentials'
+S3_BUCKET='udacity-dend'
+S3_KEY_LOG='log_data'
+S3_KEY_SONG='song_data'
+REGION='us-west-2'
+
 start_date = datetime.utcnow()
 
 default_args = {
@@ -31,236 +33,99 @@ default_args = {
 
 dag = DAG('sparkify_dag',
           default_args=default_args,
-          description='Load and transform data in Redshift with Airflow',
+          description='Create table, load and transform data in Redshift with Airflow',
           schedule_interval='0 * * * *'
-          # schedule_interval='@once'
-          )
-
-create_tables_task = ExternalTaskSensor(
-    task_id="trigger_create_tables_dag",
-    external_dag_id='create_tables_dag'
-    execution_delta=timedelta(minutes=-5),
-    allowed_states=['success', 'failed', 'skipped'],
-    failed_states=['failed', 'skipped'],
-    start_date=datetime(2018, 1, 11),
-    timeout=120,
-    # soft_fail=True,
-)
-
-# create_staging_events = SubDagOperator(
-#     subdag=get_s3_to_redshift_dag(
-#         'sparkify_dag',
-#         'create_staging_events_table',
-#         'redshift',
-#         'aws_credentials',
-#         'staging_events',
-#         create_table_stmts.CREATE_STAGING_EVENTS_TABLE,
-#         start_date=start_date,
-#     ),
-#     task_id='create_staging_events_table',
-#     dag=dag,
-#     retries= 1,
-# )
-
-# create_staging_songs = SubDagOperator(
-#     subdag=get_s3_to_redshift_dag(
-#         'sparkify_dag',
-#         'create_staging_songs_table',
-#         'redshift',
-#         'aws_credentials',
-#         'staging_events',
-#         create_table_stmts.CREATE_STAGING_SONGS_TABLE,
-#         start_date=start_date,
-#     ),
-#     task_id='create_staging_songs_table',
-#     dag=dag
-# )
-
-# create_songplays = SubDagOperator(
-#     subdag=get_s3_to_redshift_dag(
-#         'sparkify_dag',
-#         'create_songplays_table',
-#         'redshift',
-#         'aws_credentials',
-#         'staging_events',
-#         create_table_stmts.CREATE_SONGPLAYS_TABLE,
-#         start_date=start_date,
-#     ),
-#     task_id='create_songplays_table',
-#     dag=dag
-# )
-
-# create_songs = SubDagOperator(
-#     subdag=get_s3_to_redshift_dag(
-#         'sparkify_dag',
-#         'create_songs_table',
-#         'redshift',
-#         'aws_credentials',
-#         'staging_events',
-#         create_table_stmts.CREATE_SONGS_TABLE,
-#         start_date=start_date,
-#     ),
-#     task_id='create_songs_table',
-#     dag=dag
-# )
-
-# create_artists = SubDagOperator(
-#     subdag=get_s3_to_redshift_dag(
-#         'sparkify_dag',
-#         'create_artists_table',
-#         'redshift',
-#         'aws_credentials',
-#         'staging_events',
-#         create_table_stmts.CREATE_ARTISTS_TABLE,
-#         start_date=start_date,
-#     ),
-#     task_id='create_artists_table',
-#     dag=dag
-# )
-
-# create_users = SubDagOperator(
-#     subdag=get_s3_to_redshift_dag(
-#         'sparkify_dag',
-#         'create_users_table',
-#         'redshift',
-#         'aws_credentials',
-#         'staging_events',
-#         create_table_stmts.CREATE_USERS_TABLE,
-#         start_date=start_date,
-#     ),
-#     task_id='create_users_table',
-#     dag=dag
-# )
-
-# create_time = SubDagOperator(
-#     subdag=get_s3_to_redshift_dag(
-#         'sparkify_dag',
-#         'create_time_table',
-#         'redshift',
-#         'aws_credentials',
-#         'staging_events',
-#         create_table_stmts.CREATE_TIME_TABLE,
-#         start_date=start_date,
-#     ),
-#     task_id='create_time_table',
-#     dag=dag
-# )
+      )
 
 start_operator = DummyOperator(task_id='Begin_execution',  dag=dag)
 
-# create_tables_task = PostgresOperator(
-#     task_id = 'create_postgres_tables',
-#     dag=dag,
-#     postgres_conn_id = 'redshift',
-#     sql = create_tables)
+tables = ['staging_events', 'staging_songs', 'songplays', 'users', 'artists', 'songs', 'time']
+qrys = [create_table_stmts.CREATE_STAGING_EVENTS_TABLE, create_table_stmts.CREATE_STAGING_SONGS_TABLE, create_table_stmts.CREATE_SONGPLAYS_TABLE, create_table_stmts.CREATE_USERS_TABLE, create_table_stmts.CREATE_ARTISTS_TABLE, create_table_stmts.CREATE_SONGS_TABLE, create_table_stmts.CREATE_TIME_TABLE]
+create_tasks = []
+    
+for table, qry in zip(tables, qrys):
+    task = CreateTableOperator(
+        task_id=f'create_{table}_table',
+        dag=dag,
+        table=table,
+        redshift_conn_id=REDSHIFT_CONN_ID,
+        sql_stmt=qry,
+        delete=True
+    )
+    
+    create_tasks.append(task)
 
 stage_events_to_redshift = StageToRedshiftOperator(
     task_id='Stage_events',
     dag=dag,
-    redshift_conn_id='redshift',
-    aws_credentials_id='aws_credentials',
-    s3_bucket='udacity-dend',
-    s3_key='log_data',
+    redshift_conn_id=REDSHIFT_CONN_ID,
+    aws_credentials_id=AWS_CREDENTIALS_ID,
+    s3_bucket=S3_BUCKET,
+    s3_key=S3_KEY_LOG,
     table='staging_events',
-    region='us-west-2',
-    extra_params="FORMAT AS JSON 's3://udacity-dend/log_json_path.json'"
+    region=REGION,
+    extra_params="FORMAT AS JSON 's3://udacity-dend/log_json_path.json'"  
 )
 
 stage_songs_to_redshift = StageToRedshiftOperator(
     task_id='Stage_songs',
     dag=dag,
-    redshift_conn_id='redshift',
-    aws_credentials_id='aws_credentials',
-    s3_bucket='udacity-dend',
-    s3_key='song_data/A/B/C/',
+    redshift_conn_id=REDSHIFT_CONN_ID,
+    aws_credentials_id=AWS_CREDENTIALS_ID,
+    s3_bucket=S3_BUCKET,
+    s3_key=S3_KEY_SONG,
     table='staging_songs',
-    region='us-west-2',
-    extra_params="JSON 'auto' COMPUPDATE OFF"
+    region=REGION,
+    extra_params = "JSON 'auto' COMPUPDATE OFF"
 )
 
 load_songplays_table = LoadFactOperator(
     task_id='Load_songplays_fact_table',
     dag=dag,
     table='songplays',
-    redshift_conn_id='redshift',
+    redshift_conn_id=REDSHIFT_CONN_ID,
     sql_stmt=SqlQueries.songplay_table_insert
 )
 
-load_user_dimension_table = LoadDimensionOperator(
-    task_id='Load_user_dim_table',
-    dag=dag,
-    table='users',
-    redshift_conn_id='redshift',
-    truncate=True,
-    sql_stmt=SqlQueries.user_table_insert
-)
 
-load_song_dimension_table = LoadDimensionOperator(
-    task_id='Load_song_dim_table',
-    dag=dag,
-    table='songs',
-    redshift_conn_id='redshift',
-    truncate=True,
-    sql_stmt=SqlQueries.song_table_insert
-)
+dim_tables = ['users', 'artists', 'songs', 'time']
+dim_qrys = [SqlQueries.user_table_insert, SqlQueries.artist_table_insert, SqlQueries.song_table_insert, SqlQueries.time_table_insert]
+dim_tasks = []
+    
+for table, qry in zip(dim_tables, dim_qrys):
+    task = LoadDimensionOperator(
+        task_id=f'load_{table}_dim_table',
+        dag=dag,
+        table=table,
+        redshift_conn_id=REDSHIFT_CONN_ID,
+        truncate=True,
+        sql_stmt=qry,
+        delete=True
+    )
+    
+    dim_tasks.append(task)
 
-load_artist_dimension_table = LoadDimensionOperator(
-    task_id='Load_artist_dim_table',
-    dag=dag,
-    table='artists',
-    redshift_conn_id='redshift',
-    truncate=True,
-    sql_stmt=SqlQueries.artist_table_insert
-)
+data_quality_qrys = [
+    {'qry': 'SELECT COUNT(*) FROM songplays WHERE userid IS NULL', 'expected_result': 0}, 
+    {'qry': 'SELECT COUNT(*) FROM users WHERE user_id IS NULL', 'expected_result': 0}, 
+    {'qry': 'SELECT COUNT(*) FROM artists WHERE artist_id IS NULL', 'expected_result': 0}, 
+    {'qry': 'SELECT COUNT(*) FROM songs WHERE title IS NULL', 'expected_result': 0}, 
+    {'qry': 'SELECT COUNT(*) FROM time WHERE hour IS NULL', 'expected_result': 0}, 
+    {'qry': 'SELECT COUNT(*) FROM songplays WHERE level NOT IN ("paid", "free")', 'expected_result': 0}, 
+    {'qry': 'SELECT COUNT(DISTINCT weekday) FROM time', 'expected_result': 7}
+]
 
-load_time_dimension_table = LoadDimensionOperator(
-    task_id='Load_time_dim_table',
+run_quality_checks = DataQualityOperator(
+    task_id='run_quality_checks',
     dag=dag,
-    table='time',
-    redshift_conn_id='redshift',
-    truncate=True,
-    sql_stmt=SqlQueries.time_table_insert
+    data_quality_checks=data_quality_qrys,
+    redshift_conn_id='redshift'
 )
-
-# run_quality_checks = DataQualityOperator(
-#     task_id='Run_data_quality_checks',
-#     dag=dag
-# )
 
 end_operator = DummyOperator(task_id='Stop_execution',  dag=dag)
 
-
-# start_operator >> create_tables_task >> stage_events_to_redshift >> stage_songs_to_redshift >> end_operator
-# start_operator >> stage_events_to_redshift >> stage_songs_to_redshift >> end_operator
-
-# start_operator >> create_staging_events
-# start_operator >> create_staging_songs
-# start_operator >> create_songplays
-# start_operator >> create_songs
-# start_operator >> create_artists
-# start_operator >> create_users
-# start_operator >> create_time
-start_operator >> create_tables_task
-create_tables_task >> stage_events_to_redshift
-create_tables_task >> stage_songs_to_redshift
-# create_staging_events >> stage_events_to_redshift
-# create_staging_events >> stage_songs_to_redshift
-# create_staging_songs >> stage_events_to_redshift
-# create_staging_songs >> stage_songs_to_redshift
-# create_songplays >> stage_events_to_redshift
-# create_songplays >> stage_songs_to_redshift
-# create_songs >> stage_events_to_redshift
-# create_songs >> stage_songs_to_redshift
-# create_artists >> stage_events_to_redshift
-# create_artists >> stage_songs_to_redshift
-# create_users >> stage_events_to_redshift
-# create_users >> stage_songs_to_redshift
-# create_time >> stage_events_to_redshift
-# create_time >> stage_songs_to_redshift
+start_operator >> create_tasks
+create_tasks >> stage_events_to_redshift
+create_tasks >> stage_songs_to_redshift
 stage_events_to_redshift >> load_songplays_table
-stage_songs_to_redshift >> load_songplays_table
-load_songplays_table >> load_song_dimension_table >> end_operator
-load_songplays_table >> load_artist_dimension_table >> end_operator
-load_songplays_table >> load_user_dimension_table >> end_operator
-load_songplays_table >> load_time_dimension_table >> end_operator
-# load_time_dimension_table >> end_operator
+stage_songs_to_redshift >> load_songplays_table >> dim_tasks >> run_quality_checks >> end_operator
