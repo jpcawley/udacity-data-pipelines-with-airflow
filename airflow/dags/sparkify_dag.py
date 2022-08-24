@@ -99,8 +99,7 @@ for table, qry in zip(dim_tables, dim_qrys):
         table=table,
         redshift_conn_id=REDSHIFT_CONN_ID,
         truncate=True,
-        sql_stmt=qry,
-        delete=True
+        sql_stmt=qry
     )
     
     dim_tasks.append(task)
